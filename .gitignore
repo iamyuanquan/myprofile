@@ -1,0 +1,7 @@
+.DS_Store
+design-qa.md
+*检查*/
+*备份*/
+*.bak
+node_modules/
+.wrangler/
