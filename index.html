@@ -315,6 +315,43 @@ h3 { font-size: 25px; line-height: 1.45; font-weight: 600; letter-spacing: -.015
 .scene-pagination button::before { content: ''; width: 6px; height: 6px; border-radius: 5px; background: rgba(255,255,255,.4); transition: width .5s var(--ease),background .5s; }
 .scene-pagination button[aria-current="true"]::before { width: 24px; background: #fff; }
 .scene-hint { position: absolute; bottom: 42px; left: max(56px,calc((100% - 1440px) / 2)); margin: 0; color: rgba(255,255,255,.65); font-size: 12px; }
+/* Native scroll progress, inspired by Apple's pinned storytelling, not its code. */
+@supports (animation-timeline: view()) {
+  @media (prefers-reduced-motion: no-preference) {
+    .film-sequence.is-enhanced { view-timeline: --films block; view-timeline-inset: 64px 0; }
+    .sequence-viewport > .featured-work,
+    .sequence-canvas .work-atmosphere { transition: none; animation: var(--scene-animation, none) linear both; animation-timeline: --films; animation-range: contain 0% contain 100%; }
+    .sequence-viewport > .featured-work { visibility: visible; pointer-events: none; }
+    .sequence-viewport > .featured-work.is-current { pointer-events: auto; }
+    .sequence-canvas .work-atmosphere { animation-name: var(--background-animation); transform: none!important; }
+    @keyframes film-first {
+      0%, 12% { opacity: 1; transform: translateY(0); }
+      25%, 100% { opacity: 0; transform: translateY(-60px); }
+    }
+    @keyframes film-middle {
+      0%, 25% { opacity: 0; transform: translateY(60px); }
+      38%, 62% { opacity: 1; transform: translateY(0); }
+      75%, 100% { opacity: 0; transform: translateY(-60px); }
+    }
+    @keyframes film-last {
+      0%, 75% { opacity: 0; transform: translateY(60px); }
+      88%, 100% { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes film-bg-first {
+      0%, 15% { opacity: 1; }
+      35%, 100% { opacity: 0; }
+    }
+    @keyframes film-bg-middle {
+      0%, 15% { opacity: 0; }
+      35%, 65% { opacity: 1; }
+      85%, 100% { opacity: 0; }
+    }
+    @keyframes film-bg-last {
+      0%, 65% { opacity: 0; }
+      85%, 100% { opacity: 1; }
+    }
+  }
+}
 @media (max-width: 767px) {
   #projects.is-cinematic { scroll-margin-top: -40px; }
   .scene-heading { left: 22px; top: 18px; }
@@ -635,7 +672,7 @@ SOFTWARE. -->
       });
       const sequence = document.querySelector('.film-sequence');
       let currentScene = works[0];
-      if ('IntersectionObserver' in window) {
+      if ('IntersectionObserver' in window && !mobileMedia.matches && window.innerHeight >= 650) {
         const viewport = document.createElement('div');
         viewport.className = 'sequence-viewport';
         const canvas = document.createElement('div');
@@ -652,19 +689,15 @@ SOFTWARE. -->
         const pagination = document.createElement('nav');
         pagination.className = 'scene-pagination';
         pagination.setAttribute('aria-label', '代表作品切换');
-        const hint = document.createElement('p');
-        hint.className = 'scene-hint';
-        hint.textContent = '滚动探索 ↓';
-        viewport.append(pagination, hint);
-        const goToScene = item => {
+        viewport.append(pagination);
+        const goToScene = (item, behavior = 'smooth') => {
           const headerHeight = document.querySelector('.site-header').getBoundingClientRect().height;
-          // Precise anchor positioning is immediate; the scene itself crossfades.
-          // This avoids a long smooth-scroll competing with changing sticky scenes.
-          window.scrollTo({top: item.step.getBoundingClientRect().top + window.scrollY - headerHeight, behavior: 'instant'});
-          activateScene(item);
-          requestAnimationFrame(() => syncBackgrounds());
+          window.scrollTo({top: item.step.getBoundingClientRect().top + window.scrollY - headerHeight, behavior: reduced.matches ? 'instant' : behavior});
         };
         works.forEach((item,index) => {
+          const animation = ['film-first','film-middle','film-last'][index];
+          item.work.style.setProperty('--scene-animation', animation);
+          item.atmosphere.style.setProperty('--background-animation', ['film-bg-first','film-bg-middle','film-bg-last'][index]);
           item.step = document.createElement('div');
           item.step.className = 'scene-step';
           item.step.style.setProperty('--scene-index', index);
@@ -692,7 +725,6 @@ SOFTWARE. -->
             candidate.work.setAttribute('aria-hidden', String(!active));
             candidate.sceneButton.setAttribute('aria-current', String(active));
           });
-          hint.textContent = item === works.at(-1) ? '继续探索 ↓' : '滚动探索 ↓';
         };
         activateScene(currentScene);
         // A narrow viewport reading band selects native scroll steps, not the
@@ -710,70 +742,9 @@ SOFTWARE. -->
           }
         }, { rootMargin: '-49% 0px -49% 0px', threshold: 0 });
         works.forEach(item => sceneObserver.observe(item.step));
-        const nextSceneFor = direction => works[works.indexOf(currentScene) + direction];
-        let transitionUntil = 0;
-        const pinned = () => {
-          const rect = viewport.getBoundingClientRect();
-          const header = document.querySelector('.site-header').getBoundingClientRect().height;
-          return Math.abs(rect.top - header) < 12 && rect.bottom <= window.innerHeight + 12;
-        };
-        const contentCanScroll = direction => {
-          const stage = currentScene.stage;
-          return direction > 0 ? stage.scrollTop + stage.clientHeight < stage.scrollHeight - 2 : stage.scrollTop > 2;
-        };
-        const advance = direction => {
-          const next = nextSceneFor(direction);
-          if (!next) return;
-          transitionUntil = performance.now() + (reduced.matches ? 100 : 450);
-          goToScene(next);
-        };
-        let lastWheel = 0, lastDelta = 0, wheelTotal = 0, wheelUsed = false;
-        window.addEventListener('wheel', event => {
-          if (event.ctrlKey || document.querySelector('dialog[open]') || !pinned() || Math.abs(event.deltaX) > Math.abs(event.deltaY)) return;
-          const direction = Math.sign(event.deltaY);
-          if (!direction || contentCanScroll(direction)) return;
-          const now = performance.now();
-          const delta = event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? viewport.clientHeight : 1);
-          const newGesture = now - lastWheel > 140 || direction !== Math.sign(lastDelta) ||
-            (now >= transitionUntil && Math.abs(delta) > Math.max(12, Math.abs(lastDelta) * 1.8));
-          if (newGesture) { wheelTotal = 0; wheelUsed = false; }
-          lastWheel = now;
-          lastDelta = delta;
-          // At either end, release native page scrolling as soon as the transition settles.
-          if (!nextSceneFor(direction) && now >= transitionUntil) return;
-          event.preventDefault();
-          if (wheelUsed) return;
-          // A new gesture during the fade remains eligible when the fade ends.
-          if (now < transitionUntil) return;
-          wheelTotal = Math.sign(wheelTotal) === direction ? wheelTotal + delta : delta;
-          if (Math.abs(wheelTotal) >= 36) { wheelUsed = true; advance(direction); }
-        }, {passive: false});
-        let touchStartY = null, touchDelta = 0, touchCaptured = false;
-        viewport.addEventListener('touchstart', event => {
-          touchStartY = event.touches.length === 1 && pinned() ? event.touches[0].clientY : null;
-          touchDelta = 0; touchCaptured = false;
-        }, {passive: true});
-        viewport.addEventListener('touchmove', event => {
-          if (touchStartY === null || event.touches.length !== 1) return;
-          touchDelta = touchStartY - event.touches[0].clientY;
-          if (contentCanScroll(Math.sign(touchDelta)) || !nextSceneFor(Math.sign(touchDelta))) return;
-          event.preventDefault(); touchCaptured = true;
-        }, {passive: false});
-        viewport.addEventListener('touchend', () => {
-          if (touchCaptured && Math.abs(touchDelta) >= 48 && performance.now() >= transitionUntil) advance(Math.sign(touchDelta));
-          touchStartY = null;
-        });
-        viewport.addEventListener('touchcancel', () => { touchStartY = null; });
-        window.addEventListener('keydown', event => {
-          if (!pinned() || document.querySelector('dialog[open]') || event.target.closest('input,textarea,select,button,a,[contenteditable]')) return;
-          const direction = ['ArrowDown','PageDown'].includes(event.key) ? 1 : ['ArrowUp','PageUp'].includes(event.key) ? -1 : 0;
-          if (!direction || contentCanScroll(direction) || !nextSceneFor(direction)) return;
-          event.preventDefault();
-          if (!event.repeat && performance.now() >= transitionUntil) advance(direction);
-        });
         const revealProject = () => {
           const item = location.hash === '#projects' ? works[0] : works.find(candidate => `#${candidate.work.id}` === location.hash);
-          if (item) goToScene(item);
+          if (item) goToScene(item, 'instant');
         };
         window.addEventListener('hashchange', revealProject);
         window.addEventListener('load', revealProject, {once: true});
